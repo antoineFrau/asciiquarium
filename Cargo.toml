@@ -1,0 +1,29 @@
+[package]
+name = "asciquarium"
+version = "0.1.0"
+# edition = "2024" uses the very latest Rust; "2021" is the current stable
+# choice and what most crates target.  The edition only affects syntax rules
+# (like how `use` paths are resolved) — it does NOT change performance.
+edition = "2021"
+
+# --------------------------------------------------------------------------
+# Dependencies — kept minimal so we can explain every import.
+#
+# crossterm  Cross-platform terminal control: raw mode, alternate screen,
+#            ANSI colors, cursor movement, mouse events.
+#            Works on Windows/macOS/Linux without ncurses.
+#
+# rand       Standard Rust RNG crate. Fish spawns, colors, phase offsets.
+#            We use `rand::Rng` as a trait bound so any RNG can be swapped in.
+#
+# chrono     Wall-clock time for the HUD clock.  `std::time::Instant` only
+#            measures elapsed durations (monotonic); chrono gives us the
+#            actual hour:minute:second to display.
+# --------------------------------------------------------------------------
+
+[dependencies]
+crossterm = "0.28"
+# `small_rng` feature enables SmallRng — a fast non-cryptographic generator.
+# Cargo features let crates ship optional functionality; you opt in here.
+rand      = { version = "0.8", features = ["small_rng"] }
+chrono    = "0.4"
