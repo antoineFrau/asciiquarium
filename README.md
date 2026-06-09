@@ -1,6 +1,6 @@
-![Asciquarium screenshot](screenshot.png)
+![Asciiquarium video](video.gif)
 
-# Asciquarium
+# Asciiquarium
 
 A terminal aquarium simulation written in Rust. Fish swim, school, and chase food flakes; bubbles rise; seaweed sways on the sea floor; and occasional visitors (octopuses and seahorses) drift through the tank — all rendered with ASCII characters and ANSI colors.
 
@@ -8,7 +8,7 @@ A terminal aquarium simulation written in Rust. Fish swim, school, and chase foo
 
 - **Fish AI** — four species (small, medium, large, exotic) with wander, schooling, feeding, and avoidance behaviors
 - **Interactive feeding** — left-click to drop food; fish swim toward it
-- **Harpoon mode** — press `h` to toggle; click fish to remove them
+- **Harpoon mode** — press `h` to toggle; click fish to remove them (PLEASE DON'T SEE WAS A MISTAKE DO NOT KILL FISHES :sad:)
 - **Ambient life** — rising bubbles, swaying seaweed, depth-based ocean coloring
 - **Visitors** — octopuses and seahorses periodically cross the screen and repel nearby fish
 - **HUD** — live clock, active fish count, and context-sensitive control hints
@@ -43,7 +43,7 @@ cargo run --release -- --fish 10
 ## Options
 
 ```
-Usage: asciquarium [OPTIONS]
+Usage: Asciiquarium [OPTIONS]
 
 Options:
   --fish N    Number of fish to spawn (default: 24, min: 1, max: 200)

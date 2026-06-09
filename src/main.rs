@@ -113,7 +113,7 @@ fn parse_config() -> Option<Config> {
     while i < args.len() {
         match args[i].as_str() {
             "--help" | "-h" => {
-                eprintln!("Usage: asciquarium [OPTIONS]");
+                eprintln!("Usage: Asciiquarium [OPTIONS]");
                 eprintln!();
                 eprintln!("Options:");
                 eprintln!("  --fish N    Number of fish to spawn (default: 24, min: 1, max: 200)");

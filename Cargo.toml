@@ -1,5 +1,5 @@
 [package]
-name = "asciquarium"
+name = "asciiquarium"
 version = "0.1.0"
 # edition = "2024" uses the very latest Rust; "2021" is the current stable
 # choice and what most crates target.  The edition only affects syntax rules
