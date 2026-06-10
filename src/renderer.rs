@@ -80,6 +80,21 @@ pub struct Renderer {
     // Both buffers are the same length: width * height.
     back_buffer: Vec<Cell>,
     front_buffer: Vec<Cell>,
+
+    // ── Viewport (optional drawing offset + clip) ─────────────────────────────
+    //
+    // Normally `put(x, y)` writes to absolute terminal cell (x, y).  When a
+    // viewport is active, coordinates become *relative* to a sub-rectangle:
+    // (x, y) is translated to (vp_x + x, vp_y + y) and clipped to vp_w × vp_h.
+    //
+    // This lets the aquarium render itself into a framed "fish tank" region
+    // (cat mode) using the exact same 0-based drawing code it uses when it
+    // owns the whole screen — the renderer hides the offset.
+    vp_x: u16,
+    vp_y: u16,
+    vp_w: u16,
+    vp_h: u16,
+    vp_active: bool,
 }
 
 impl Renderer {
@@ -96,7 +111,32 @@ impl Renderer {
             height: h,
             back_buffer: vec![Cell::empty(); size],
             front_buffer: vec![Cell::empty(); size],
+            vp_x: 0,
+            vp_y: 0,
+            vp_w: w,
+            vp_h: h,
+            vp_active: false,
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Viewport control.
+    //
+    // `set_viewport` makes subsequent `put`/`put_str` calls draw *relative* to
+    // (x, y) and clip to a w × h box — used to confine the aquarium to its
+    // framed tank in cat mode.  `reset_viewport` returns to absolute drawing
+    // (for the room, frame, couch, cat and HUD which live on the full screen).
+    // -------------------------------------------------------------------------
+    pub fn set_viewport(&mut self, x: u16, y: u16, w: u16, h: u16) {
+        self.vp_x = x;
+        self.vp_y = y;
+        self.vp_w = w;
+        self.vp_h = h;
+        self.vp_active = true;
+    }
+
+    pub fn reset_viewport(&mut self) {
+        self.vp_active = false;
     }
 
     // -------------------------------------------------------------------------
@@ -108,6 +148,17 @@ impl Renderer {
     // off-screen during transitions.
     // -------------------------------------------------------------------------
     pub fn put(&mut self, x: u16, y: u16, ch: char, fg: Color, bg: Color) {
+        // When a viewport is active, treat (x, y) as relative to it: clip to the
+        // viewport's own bounds first, then translate into absolute coordinates.
+        let (x, y) = if self.vp_active {
+            if x >= self.vp_w || y >= self.vp_h {
+                return; // outside the tank interior — clip it
+            }
+            (self.vp_x + x, self.vp_y + y)
+        } else {
+            (x, y)
+        };
+
         if x >= self.width || y >= self.height {
             return; // silently ignore out-of-bounds draws
         }
@@ -226,6 +277,13 @@ impl Renderer {
         let size = (w as usize) * (h as usize);
         self.back_buffer = vec![Cell::empty(); size];
         self.front_buffer = vec![Cell::empty(); size];
+        // Drop any active viewport — it will be re-established each frame by the
+        // aquarium if cat mode is on.
+        self.vp_x = 0;
+        self.vp_y = 0;
+        self.vp_w = w;
+        self.vp_h = h;
+        self.vp_active = false;
     }
 
     // Draw the initial blank frame and hide the cursor.
@@ -234,6 +292,21 @@ impl Renderer {
         queue!(out, Hide, Clear(ClearType::All))?;
         out.flush()?;
         Ok(())
+    }
+
+    // Snapshot the back buffer as plain text rows (one String per row).
+    // Used by tests to eyeball a frame without a real terminal — colors are
+    // dropped, only the glyphs remain.  `#[cfg(test)]` keeps it out of release
+    // builds (and silences the "never used" warning there).
+    #[cfg(test)]
+    pub fn debug_rows(&self) -> Vec<String> {
+        (0..self.height)
+            .map(|y| {
+                (0..self.width)
+                    .map(|x| self.back_buffer[(y as usize) * (self.width as usize) + x as usize].ch)
+                    .collect::<String>()
+            })
+            .collect()
     }
 
     // Restore the cursor when the program exits.

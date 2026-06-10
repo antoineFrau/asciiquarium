@@ -9,6 +9,7 @@ A terminal aquarium simulation written in Rust. Fish swim, school, and chase foo
 - **Fish AI** — four species (small, medium, large, exotic) with wander, schooling, feeding, and avoidance behaviors
 - **Interactive feeding** — left-click to drop food; fish swim toward it
 - **Harpoon mode** — press `h` to toggle; click fish to remove them (PLEASE DON'T SEE WAS A MISTAKE DO NOT KILL FISHES :sad:)
+- **Cat mode** — press `c` to sink the aquarium into a cosy living room, framed on the wall, with a cat curled up on the couch watching the fish
 - **Ambient life** — rising bubbles, swaying seaweed, depth-based ocean coloring
 - **Visitors** — octopuses and seahorses periodically cross the screen and repel nearby fish
 - **HUD** — live clock, active fish count, and context-sensitive control hints
@@ -37,6 +38,7 @@ cargo run --release -- --fish 10
 | Input | Action |
 |-------|--------|
 | `q` or `Ctrl-C` | Quit |
+| `c` | Toggle cat mode (frame the tank in a living room with a cat watching from the couch) |
 | `h` | Toggle harpoon mode |
 | Left click | Drop food (normal mode) or kill fish under cursor (harpoon mode) |
 

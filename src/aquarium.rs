@@ -56,6 +56,18 @@ const SEA_FLOOR_OFFSET: f32 = 2.0;
 // Seaweed starts this many rows above the sea floor.
 const SEA_LEVEL_OFFSET: f32 = 4.0;
 
+// ─── Cat-mode (living room) palette ──────────────────────────────────────────
+// Deliberately muted so the bright tank "glows" against the dim room.
+// `Color::AnsiValue(_)` is a plain enum variant, so these are valid consts.
+const WALL_BG:   Color = Color::AnsiValue(236); // dark room wall
+const CARPET_BG: Color = Color::AnsiValue(95);  // warm carpet strip at the floor
+const FRAME_FG:  Color = Color::AnsiValue(214); // light wood / brass frame
+const FRAME_BG:  Color = Color::AnsiValue(94);  // darker wood shadow
+const COUCH_FG:  Color = Color::AnsiValue(110); // couch piping / outline
+const COUCH_BG:  Color = Color::AnsiValue(24);  // muted blue upholstery
+const CAT_FG:    Color = Color::AnsiValue(208); // orange tabby
+const CAT_EYE:   Color = Color::AnsiValue(46);  // bright green eyes, fixed on the fish
+
 // =============================================================================
 // Aquarium
 // =============================================================================
@@ -105,15 +117,52 @@ pub struct Aquarium {
     // Tuple: (display message, fish colour, seconds remaining).
     // `Option<T>` — None when no notification is active.
     kill_msg: Option<(String, Color, f32)>,
+
+    // ── Cat (living-room) mode ─────────────────────────────────────────────────
+    // When true, the aquarium is shrunk into a framed, wall-mounted tank set
+    // into a cosy living room, with a cat sitting on a couch watching it.
+    // Toggled with the 'c' key.
+    //
+    // The simulation's logical `width`/`height` (above) become the tank's
+    // *interior* in this mode; `term_width`/`term_height` keep the true screen
+    // size for drawing the room around it.
+    pub cat_mode: bool,
+    term_width:  f32,
+    term_height: f32,
+
+    // Tank interior viewport in absolute terminal cells: top-left (x, y) and
+    // size (w, h).  Equal to the whole screen when cat mode is off.
+    vp_x: u16,
+    vp_y: u16,
+    vp_w: u16,
+    vp_h: u16,
 }
 
 impl Aquarium {
     // -------------------------------------------------------------------------
     // new — initialise a full aquarium for the given terminal size.
+    //
+    // Starts in full-screen mode (cat mode off).  Cat mode is toggled later at
+    // runtime with `toggle_cat_mode`, which rebuilds the tank at the smaller
+    // size via the same `build` routine.
     // -------------------------------------------------------------------------
     pub fn new(width: u16, height: u16, config: Config) -> Self {
-        let w = width  as f32;
-        let h = height as f32;
+        Self::build(width, height, config.fish_count.max(1), false)
+    }
+
+    // -------------------------------------------------------------------------
+    // build — the real constructor, shared by `new`, `resize` and
+    // `toggle_cat_mode`.  It works out the tank viewport for the current mode,
+    // then populates every entity pool to fit that interior.
+    // -------------------------------------------------------------------------
+    fn build(term_w: u16, term_h: u16, fish_count: usize, cat_mode: bool) -> Self {
+        // The tank interior is the whole screen normally, or a framed
+        // sub-rectangle in cat mode.  The simulation only ever sees this
+        // interior as its `width`/`height`.
+        let (vp_x, vp_y, vp_w, vp_h) = tank_viewport(term_w, term_h, cat_mode);
+
+        let w = vp_w as f32;
+        let h = vp_h as f32;
 
         let sea_floor = h - SEA_FLOOR_OFFSET;
         let sea_level = h - SEA_LEVEL_OFFSET;
@@ -121,8 +170,6 @@ impl Aquarium {
         // `SmallRng::from_entropy()` seeds from the OS's random source
         // (e.g. /dev/urandom on Linux).  Each run is unique.
         let mut rng = SmallRng::from_entropy();
-
-        let fish_count = config.fish_count.max(1);
 
         // Spawn fish on a loose grid to prevent initial clustering.
         // We divide the swim area into a grid of cells and place one fish
@@ -197,15 +244,51 @@ impl Aquarium {
             fish_count,
             harpoon_mode: false,
             kill_msg: None,
+            cat_mode,
+            term_width:  term_w as f32,
+            term_height: term_h as f32,
+            vp_x,
+            vp_y,
+            vp_w,
+            vp_h,
         }
     }
 
     // -------------------------------------------------------------------------
     // resize — called when the terminal window changes size (Event::Resize).
-    // We reinitialise to avoid entities being outside the new bounds.
+    // We reinitialise to avoid entities being outside the new bounds, keeping
+    // the current display mode.
     // -------------------------------------------------------------------------
     pub fn resize(&mut self, width: u16, height: u16) {
-        *self = Aquarium::new(width, height, Config { fish_count: self.fish_count });
+        *self = Aquarium::build(width, height, self.fish_count, self.cat_mode);
+    }
+
+    // -------------------------------------------------------------------------
+    // toggle_cat_mode — switch between full-screen and living-room (cat) mode.
+    //
+    // The tank changes size, so we rebuild the simulation to fit the new
+    // interior (just like a resize).  The current fish count is preserved.
+    // -------------------------------------------------------------------------
+    pub fn toggle_cat_mode(&mut self) {
+        let (w, h) = (self.term_width as u16, self.term_height as u16);
+        *self = Aquarium::build(w, h, self.fish_count, !self.cat_mode);
+    }
+
+    // -------------------------------------------------------------------------
+    // to_tank_coords — map an absolute terminal click into tank-local space.
+    //
+    // In full-screen mode the tank fills the screen, so this is the identity.
+    // In cat mode the tank is offset by (vp_x, vp_y); clicks outside the tank
+    // interior return None so they don't feed/harpoon phantom fish through the
+    // wall.
+    // -------------------------------------------------------------------------
+    fn to_tank_coords(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        let lx = x - self.vp_x as f32;
+        let ly = y - self.vp_y as f32;
+        if lx < 0.0 || ly < 0.0 || lx >= self.vp_w as f32 || ly >= self.vp_h as f32 {
+            return None;
+        }
+        Some((lx, ly))
     }
 
     // -------------------------------------------------------------------------
@@ -215,6 +298,9 @@ impl Aquarium {
     // if we haven't hit MAX_FLAKES yet.  This avoids unbounded allocation.
     // -------------------------------------------------------------------------
     pub fn spawn_flake(&mut self, x: f32, y: f32) {
+        // Translate the absolute click into tank-local space; ignore clicks
+        // that land on the room rather than inside the tank (cat mode).
+        let Some((x, y)) = self.to_tank_coords(x, y) else { return };
         let pos = Vec2::new(x, y);
 
         // Look for an inactive slot first.
@@ -258,6 +344,9 @@ impl Aquarium {
     // exactly on) the glyph still registers.
     // -------------------------------------------------------------------------
     pub fn try_harpoon(&mut self, x: f32, y: f32) -> bool {
+        // Translate the absolute click into tank-local space; a click on the
+        // room (cat mode) hits nothing.
+        let Some((x, y)) = self.to_tank_coords(x, y) else { return false };
         let click = Vec2::new(x, y);
 
         // ── Pass 1: find the closest fish whose bounding box contains the click.
@@ -495,6 +584,34 @@ impl Aquarium {
     pub fn render_to(&self, renderer: &mut Renderer) {
         renderer.clear_back();
 
+        // In cat mode the room (wall, frame, couch, cat) is painted first at
+        // absolute screen coordinates, then the tank contents are drawn inside
+        // a viewport so they stay within the frame.
+        if self.cat_mode {
+            self.draw_room(renderer);
+            renderer.set_viewport(self.vp_x, self.vp_y, self.vp_w, self.vp_h);
+        }
+
+        // The world (water + entities) is drawn identically in both modes —
+        // the viewport, when active, transparently offsets and clips it.
+        self.draw_world(renderer);
+        // Kill banner belongs to the tank, so draw it while the viewport (if
+        // any) is still active and on top of the fish.
+        self.draw_kill_notification(renderer);
+
+        if self.cat_mode {
+            renderer.reset_viewport();
+        }
+
+        // HUD always lives on the full screen, above everything.
+        self.draw_hud(renderer);
+    }
+
+    // -------------------------------------------------------------------------
+    // draw_world — the ocean and its inhabitants, drawn in tank-local
+    // coordinates (the renderer's viewport handles any offset in cat mode).
+    // -------------------------------------------------------------------------
+    fn draw_world(&self, renderer: &mut Renderer) {
         let time = self.time;
         self.draw_background(renderer);
         for sw in &self.seaweed {
@@ -511,9 +628,6 @@ impl Aquarium {
             fish.draw(renderer);
         }
         self.visitor.draw(renderer, time);
-        self.draw_hud(renderer);
-        // Draw on top of everything so it's never obscured.
-        self.draw_kill_notification(renderer);
     }
 
     // ─── Draw helpers ─────────────────────────────────────────────────────────
@@ -563,7 +677,9 @@ impl Aquarium {
     }
 
     fn draw_hud(&self, renderer: &mut Renderer) {
-        let w = self.width as u16;
+        // The HUD spans the whole screen, so use the terminal width (which
+        // equals the tank width when cat mode is off).
+        let w = self.term_width as u16;
 
         // Clock in the top-left corner.
         let now = Local::now();
@@ -581,8 +697,10 @@ impl Aquarium {
         // The text and colour change to signal the active mode.
         let hint = if self.harpoon_mode {
             " q:quit  h:off  click:KILL "
+        } else if self.cat_mode {
+            " q:quit  c:full  h:harpoon  click:feed "
         } else {
-            " q:quit  h:harpoon  click:feed "
+            " q:quit  c:cat  h:harpoon  click:feed "
         };
         let hint_color = if self.harpoon_mode {
             Color::Red            // red in harpoon mode — danger!
@@ -592,11 +710,18 @@ impl Aquarium {
         let hint_x = w.saturating_sub(hint.chars().count() as u16);
         renderer.put_str(hint_x, 0, hint, hint_color, Color::AnsiValue(17));
 
-        // Fish count at the top-centre.
+        // Fish count at the top-centre — but only if it fits cleanly between
+        // the clock (left) and the hint (right).  On a narrow terminal the
+        // three would collide, so we drop the least-critical counter rather
+        // than render a garbled overlap.
         let active_fish = self.fish.iter().filter(|f| f.active).count();
         let count_str = format!(" {}/{} fish ", active_fish, self.fish.len());
-        let count_x = (w / 2).saturating_sub(count_str.chars().count() as u16 / 2);
-        renderer.put_str(count_x, 0, &count_str, Color::AnsiValue(159), Color::AnsiValue(17));
+        let count_len = count_str.chars().count() as u16;
+        let count_x   = (w / 2).saturating_sub(count_len / 2);
+        let clock_end = clock_str.chars().count() as u16;
+        if count_x >= clock_end && count_x + count_len <= hint_x {
+            renderer.put_str(count_x, 0, &count_str, Color::AnsiValue(159), Color::AnsiValue(17));
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -621,6 +746,218 @@ impl Aquarium {
         // so it pops against any ocean shade underneath.
         renderer.put_str(x, y, msg, *color, Color::AnsiValue(17));
     }
+
+    // =========================================================================
+    // Cat mode — the living room around the tank
+    // =========================================================================
+    //
+    // All of these draw at *absolute* terminal coordinates (the viewport is not
+    // active when they run).  The single source of truth for layout is the
+    // stored tank viewport (`vp_x/y/w/h`): the picture frame hugs it, and the
+    // couch + cat sit in the strip of screen below it.
+    // -------------------------------------------------------------------------
+    fn draw_room(&self, renderer: &mut Renderer) {
+        let tw = self.term_width as u16;
+        let th = self.term_height as u16;
+
+        // 1. Wall — fill the whole screen.  The tank contents and furniture
+        //    paint over it afterwards.
+        for y in 0..th {
+            for x in 0..tw {
+                renderer.put(x, y, ' ', Color::Reset, WALL_BG);
+            }
+        }
+
+        // 2. Carpet — a couple of warm rows along the very bottom.
+        let carpet_top = th.saturating_sub(2);
+        for y in carpet_top..th {
+            for x in 0..tw {
+                renderer.put(x, y, ' ', Color::Reset, CARPET_BG);
+            }
+        }
+
+        // 3. Picture frame around the tank, derived from the viewport.
+        self.draw_tank_frame(renderer);
+
+        // 4. Couch + cat in the foreground strip below the tank.
+        //    Width is ~70% of the screen, centred, but never wider than the
+        //    screen itself.
+        let couch_w = ((tw * 7) / 10).max(24).min(tw.saturating_sub(2)).max(8);
+        let couch_x = (tw.saturating_sub(couch_w)) / 2;
+        let couch_h = 4u16;
+        // Sit the couch just above the carpet.
+        let couch_top = th.saturating_sub(couch_h + 1);
+
+        self.draw_couch(renderer, couch_x, couch_top, couch_w);
+
+        // The cat sits centred on the couch, just above the backrest, looking
+        // up at the fish.
+        let cat_x = (couch_x + couch_w / 2).saturating_sub(9);
+        let cat_top = couch_top.saturating_sub(3);
+        self.draw_cat(renderer, cat_x, cat_top);
+    }
+
+    // -------------------------------------------------------------------------
+    // draw_tank_frame — a wooden picture frame hugging the tank interior.
+    // -------------------------------------------------------------------------
+    fn draw_tank_frame(&self, renderer: &mut Renderer) {
+        // Outer rectangle = interior expanded by the 1-cell border.
+        let ox = self.vp_x.saturating_sub(1);
+        let oy = self.vp_y.saturating_sub(1);
+        let ow = self.vp_w + 2;
+        let oh = self.vp_h + 2;
+        let right  = ox + ow - 1;
+        let bottom = oy + oh - 1;
+
+        // Top and bottom edges.
+        for x in ox..=right {
+            renderer.put(x, oy,     '=', FRAME_FG, FRAME_BG);
+            renderer.put(x, bottom, '=', FRAME_FG, FRAME_BG);
+        }
+        // Left and right edges.
+        for y in oy..=bottom {
+            renderer.put(ox,    y, '|', FRAME_FG, FRAME_BG);
+            renderer.put(right, y, '|', FRAME_FG, FRAME_BG);
+        }
+        // Corners.
+        renderer.put(ox,    oy,     '+', FRAME_FG, FRAME_BG);
+        renderer.put(right, oy,     '+', FRAME_FG, FRAME_BG);
+        renderer.put(ox,    bottom, '+', FRAME_FG, FRAME_BG);
+        renderer.put(right, bottom, '+', FRAME_FG, FRAME_BG);
+
+        // Little engraved label on the top rail.
+        let label = " ~ aquarium ~ ";
+        let len   = label.chars().count() as u16;
+        if ow > len + 2 {
+            let lx = ox + (ow - len) / 2;
+            renderer.put_str(lx, oy, label, FRAME_FG, FRAME_BG);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // draw_couch — a filled four-row sofa with cushion seams.
+    //
+    //   /----------\
+    //   |    |     |
+    //   |    |     |
+    //   \__________/
+    // -------------------------------------------------------------------------
+    fn draw_couch(&self, renderer: &mut Renderer, cx: u16, cy: u16, cw: u16) {
+        if cw < 4 {
+            return;
+        }
+        let right = cx + cw - 1;
+
+        for r in 0..4u16 {
+            let y = cy + r;
+            for x in cx..=right {
+                let left_edge  = x == cx;
+                let right_edge = x == right;
+                let ch = match r {
+                    0 => if left_edge { '/' } else if right_edge { '\\' } else { '-' },
+                    3 => if left_edge { '\\' } else if right_edge { '/' } else { '_' },
+                    _ => if left_edge || right_edge { '|' } else { ' ' },
+                };
+                renderer.put(x, y, ch, COUCH_FG, COUCH_BG);
+            }
+        }
+
+        // Cushion seams on the two backrest rows.
+        let ncush = (cw / 14).max(2);
+        for i in 1..ncush {
+            let sx = cx + (i * cw) / ncush;
+            renderer.put(sx, cy + 1, '|', COUCH_FG, COUCH_BG);
+            renderer.put(sx, cy + 2, '|', COUCH_FG, COUCH_BG);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // draw_cat — "Melu", a sitting cat drawn against the wall just above the
+    // couch.  It blinks every few seconds and waves a paw beside its head;
+    // spaces in the sprite are skipped so the wall shows through the gaps.
+    //
+    //     |\__/,|   (`\
+    //   _.|o o  |_   ) )
+    //  -(((---(((--------
+    // -------------------------------------------------------------------------
+    fn draw_cat(&self, renderer: &mut Renderer, x: u16, y: u16) {
+        let time = self.time;
+
+        // Blink for a short window every ~4.5 seconds.
+        let blink = (time % 4.5) < 0.18;
+        let eyes = if blink { "- -" } else { "o o" };
+
+        // The paw waves: two poses alternate every ~0.5s.  The body (cols 0..12
+        // of the top two rows) is fixed; only the paw half on the right moves.
+        let paw_up = (time * 2.0) as i32 % 2 == 0;
+        let (row0, row1) = if paw_up {
+            ("    |\\__/,|   (`\\".to_string(),
+             format!("  _.|{}  |_   ) )", eyes))
+        } else {
+            ("    |\\__/,|     /´)".to_string(),
+             format!("  _.|{}  |_   ( (", eyes))
+        };
+        let rows = [row0.as_str(), row1.as_str(), "-(((---(((--------"];
+
+        for (r, line) in rows.iter().enumerate() {
+            let yy = y + r as u16;
+            for (i, ch) in line.chars().enumerate() {
+                if ch == ' ' {
+                    continue; // let the wall show through
+                }
+                renderer.put(x + i as u16, yy, ch, CAT_FG, WALL_BG);
+            }
+        }
+
+        // Green eyes, fixed on the tank — overdrawn only when the cat isn't
+        // mid-blink.  Eye glyphs sit at offsets 5 and 7 of the middle row.
+        if !blink {
+            renderer.put(x + 5, y + 1, 'o', CAT_EYE, WALL_BG);
+            renderer.put(x + 7, y + 1, 'o', CAT_EYE, WALL_BG);
+        }
+
+        // Her name, signed on the wall beside her on the bottom row.
+        renderer.put_str(x + 24, y + 2, "Melu", CAT_FG, WALL_BG);
+    }
+}
+
+// =============================================================================
+// Free helper: work out the tank interior rectangle for the current mode.
+//
+// Returns (x, y, w, h) in absolute terminal cells.
+//   - full-screen mode → the whole terminal
+//   - cat mode         → a framed sub-rectangle, leaving a margin of wall on
+//                        the sides/top and a foreground strip at the bottom for
+//                        the couch and cat.
+//
+// We avoid `clamp` (which panics when min > max on tiny terminals) and lean on
+// saturating arithmetic with min/max so the layout degrades gracefully instead
+// of crashing in a one-line window.
+// =============================================================================
+fn tank_viewport(term_w: u16, term_h: u16, cat_mode: bool) -> (u16, u16, u16, u16) {
+    if !cat_mode {
+        return (0, 0, term_w, term_h);
+    }
+
+    // Foreground strip reserved at the bottom for the couch + cat (~1/3 of the
+    // height, but at least 9 rows and never eating the whole screen).
+    let foreground = (term_h / 3).max(9).min(term_h.saturating_sub(6)).max(3);
+    // Side margins of wall around the frame.
+    let side = (term_w / 8).max(2).min(10);
+    let top  = 1u16; // a row of wall above the frame
+
+    // Outer frame rectangle.
+    let outer_x = side;
+    let outer_y = top;
+    let outer_w = term_w.saturating_sub(2 * side).max(6);
+    let outer_h = term_h.saturating_sub(foreground + top).max(6);
+
+    // Interior = outer minus the 1-cell border on every edge.
+    let vp_x = outer_x + 1;
+    let vp_y = outer_y + 1;
+    let vp_w = outer_w.saturating_sub(2).max(1);
+    let vp_h = outer_h.saturating_sub(2).max(1);
+    (vp_x, vp_y, vp_w, vp_h)
 }
 
 // =============================================================================
@@ -643,5 +980,29 @@ fn interpolate_ocean_color(depth_frac: f32) -> Color {
         Color::AnsiValue(21)
     } else {
         Color::AnsiValue(27) // lighter blue near surface
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::renderer::Renderer;
+
+    // Render one cat-mode frame and dump it as text so a human can eyeball the
+    // living-room scene.  Run with: cargo test scene_snapshot -- --nocapture
+    #[test]
+    fn scene_snapshot() {
+        let (w, h) = (80u16, 28u16);
+        let mut aq = Aquarium::build(w, h, 18, true);
+        let mut r = Renderer::new(w, h);
+        // Advance a little so fish/bubbles spread out.
+        for _ in 0..30 {
+            aq.update(0.05);
+        }
+        aq.render_to(&mut r);
+        println!("\n--- cat-mode scene ({}x{}) ---", w, h);
+        for row in r.debug_rows() {
+            println!("{}", row);
+        }
     }
 }

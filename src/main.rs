@@ -121,6 +121,7 @@ fn parse_config() -> Option<Config> {
                 eprintln!();
                 eprintln!("Controls:");
                 eprintln!("  q / Ctrl-C  Quit");
+                eprintln!("  c           Toggle cat mode (watch the tank from the couch)");
                 eprintln!("  h           Toggle harpoon mode (click to kill fish)");
                 eprintln!("  click       Drop food / harpoon fish");
                 return None;
@@ -224,6 +225,12 @@ fn main() -> std::io::Result<()> {
                 // 'h' toggles harpoon mode on/off.
                 Event::Key(k) if k.code == KeyCode::Char('h') => {
                     aquarium.toggle_harpoon();
+                }
+                // 'c' toggles cat mode: frame the tank into a living room with
+                // a cat on the couch watching the fish.
+                Event::Key(k) if k.code == KeyCode::Char('c') => {
+                    aquarium.toggle_cat_mode();
+                    renderer.force_redraw(); // tank moved — repaint every cell
                 }
 
                 // ── Mouse ─────────────────────────────────────────────────
